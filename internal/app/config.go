@@ -16,7 +16,7 @@ type (
 	}
 
 	Logger struct {
-		Level *int8 `koanf:"level" validate:"required"`
+		Level int8 `koanf:"level" validate:"gte=-1,lte=5"`
 	}
 
 	HTTP struct {
@@ -38,15 +38,12 @@ type (
 		Host     string `koanf:"host" validate:"required"`
 		Port     string `koanf:"port" validate:"required"`
 		Password string `koanf:"password"`
-		DB       *int8  `koanf:"db" validate:"required"`
+		DB       int    `koanf:"db" validate:"gte=0,lte=15"`
 	}
 )
 
 func LoadConfig() (*Config, error) {
 	k := koanf.New(".")
-
-	defaultLogLevel := int8(-1)
-	zero := int8(0)
 
 	cfg := &Config{
 		HTTP: HTTP{
@@ -54,10 +51,10 @@ func LoadConfig() (*Config, error) {
 			Port: "8000",
 		},
 		Logger: Logger{
-			Level: &defaultLogLevel,
+			Level: -1,
 		},
 		Postgres: Postgres{
-			ConnString:      "postgresql://root:pass@127.0.0.1:5432/admin?sslmode=disable&application_name=admin-service",
+			ConnString:      "postgresql://root:pass@127.0.0.1:5432/users?sslmode=disable&application_name=user-service",
 			MaxOpenConns:    10,
 			ConnMaxLifetime: 20,
 			MaxIdleConns:    15,
@@ -69,7 +66,7 @@ func LoadConfig() (*Config, error) {
 			Host:     "127.0.0.1",
 			Port:     "6379",
 			Password: "",
-			DB:       &zero,
+			DB:       0,
 		},
 	}
 

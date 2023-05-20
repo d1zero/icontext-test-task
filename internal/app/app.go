@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	v1 "icontext-test-task/internal/controller/v1"
+	"icontext-test-task/internal/gateway"
+	"icontext-test-task/internal/service"
 	"log"
 	"net"
 	"os"
@@ -19,14 +22,23 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	// db driver
+	_ "github.com/jackc/pgx/v5/stdlib"
+
+	// gomigrate migration resolver
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/golang-migrate/migrate/v4/source/github"
 )
 
 func Run() {
+	// loading config
 	cfg, err := LoadConfig()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 
+	// creating logger
 	atom := zap.NewAtomicLevel()
 	zapCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
@@ -42,9 +54,10 @@ func Run() {
 	}(logger)
 
 	l := logger.Sugar()
-	atom.SetLevel(zapcore.Level(*cfg.Logger.Level))
+	atom.SetLevel(zapcore.Level(cfg.Logger.Level))
 	l.Infof("logger initialized successfully")
 
+	// connecting to database
 	db, err := sqlx.Connect("pgx", cfg.Postgres.ConnString)
 	if err != nil {
 		l.Error(err)
@@ -70,6 +83,7 @@ func Run() {
 		return
 	}
 
+	// auto-apply migrations if configured
 	if cfg.Postgres.AutoMigrate {
 		migrationDriver, err := postgres.WithInstance(db.DB, &postgres.Config{})
 		if err != nil {
@@ -96,12 +110,14 @@ func Run() {
 
 	l.Debug("Connected to PostgreSQL")
 
+	// creating redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     net.JoinHostPort(cfg.Redis.Host, cfg.Redis.Port),
 		Password: cfg.Redis.Password,
-		DB:       int(*cfg.Redis.DB),
+		DB:       cfg.Redis.DB,
 	})
 
+	// redis client connection check
 	pong, err := redisClient.Ping(context.Background()).Result()
 	if err != nil || pong != "PONG" {
 		l.Errorf("unable to ping redis: %v", err)
@@ -110,12 +126,35 @@ func Run() {
 
 	l.Infof("connected to redis successfully")
 
+	// creating fiber app
 	f := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
+		ErrorHandler:          v1.HandleError(),
 	})
 	f.Use(fiberzap.New(fiberzap.Config{
 		Logger: logger,
 	}))
+
+	// creating repositories
+	userRepo := gateway.NewUserRepository(db, redisClient)
+
+	// creating services
+	userService := service.NewUserService(userRepo)
+
+	// creating controllers
+	redisController := v1.NewRedisController(userService)
+	postgresController := v1.NewPostgresController(userService)
+	signController := v1.NewSignController(userService)
+
+	// defining groups
+	redisGroup := f.Group("redis")
+	postgresGroup := f.Group("postgres")
+	signGroup := f.Group("sign")
+
+	// registering http routes
+	redisController.RegisterRoutes(redisGroup)
+	postgresController.RegisterRoutes(postgresGroup)
+	signController.RegisterRoutes(signGroup)
 
 	go func() {
 		err = f.Listen(net.JoinHostPort(cfg.HTTP.Host, cfg.HTTP.Port))
